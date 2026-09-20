@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_vless/flutter_vless.dart';
 import 'package:http/http.dart' as http;
-import 'dart:convert';
-import 'package:url_launcher/url_launcher.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   runApp(const ThekApp());
@@ -19,14 +18,12 @@ class ThekApp extends StatelessWidget {
       theme: ThemeData(
         brightness: Brightness.dark,
         scaffoldBackgroundColor: const Color(0xFF0F1115),
-        primaryColor: const Color(0xFF3B82F6),
         colorScheme: const ColorScheme.dark(
           primary: Color(0xFF3B82F6),
           secondary: Color(0xFF8B5CF6),
           surface: Color(0xFF1A1D24),
         ),
         useMaterial3: true,
-        fontFamily: 'Roboto',
       ),
       home: const HomeScreen(),
     );
@@ -41,129 +38,168 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  final FlutterVless _vless = FlutterVless(
+    onStatusChanged: (status) {
+      debugPrint('VPN: state=${status.state} connection=${status.connectionState.name}');
+    },
+  );
+
   bool _connected = false;
-  bool _loading = true;
-  String _userName = 'Гость';
-  int _daysLeft = 0;
-  String _tariff = 'Нет подписки';
-  double _balance = 0;
-  List<Map<String, dynamic>> _servers = [];
+  bool _connecting = false;
   String _subUrl = '';
-  int _selectedServer = 0;
+  List<FlutterVlessURL> _servers = [];
+  int _selectedIdx = 0;
+  String _error = '';
 
   @override
   void initState() {
     super.initState();
-    _loadData();
+    _initVless();
+    _loadSubUrl();
   }
 
-  Future<void> _loadData() async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('token') ?? '';
-    final name = prefs.getString('name') ?? 'Гость';
-    setState(() {
-      _userName = name;
-      _loading = false;
-    });
-    if (token.isNotEmpty) {
-      await _fetchSubscription(token);
+  Future<void> _initVless() async {
+    try {
+      await _vless.initializeVless(
+        providerBundleIdentifier: 'com.thek.app',
+        groupIdentifier: 'group.com.thek.app',
+      );
+    } catch (e) {
+      debugPrint('Init error: $e');
     }
   }
 
-  Future<void> _fetchSubscription(String token) async {
-    try {
-      final res = await http.get(
-        Uri.parse('http://77.239.101.146:8080/miniapp/api/me?user_id=0'),
-      );
-      if (res.statusCode == 200) {
-        final data = jsonDecode(res.body);
-        setState(() {
-          _daysLeft = data['subscription']?['days_left'] ?? 0;
-          _tariff = data['subscription']?['tariff_name'] ?? 'Нет подписки';
-          _balance = (data['user']?['balance'] ?? 0).toDouble();
-        });
-      }
-    } catch (_) {}
+  Future<void> _loadSubUrl() async {
+    final prefs = await SharedPreferences.getInstance();
+    final url = prefs.getString('sub_url') ?? '';
+    if (url.isNotEmpty) {
+      setState(() => _subUrl = url);
+      await _loadServers(url);
+    }
   }
 
-  void _toggleConnect() {
-    setState(() => _connected = !_connected);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(_connected ? '✅ Подключено' : '❌ Отключено'),
-        duration: const Duration(seconds: 2),
-        backgroundColor: _connected ? const Color(0xFF22C55E) : const Color(0xFFEF4444),
+  Future<void> _loadServers(String url) async {
+    try {
+      final res = await http.get(Uri.parse(url));
+      if (res.statusCode != 200) throw Exception('HTTP ${res.statusCode}');
+      final parsed = FlutterVless.parseMany(res.body);
+      setState(() {
+        _servers = parsed;
+        _error = parsed.isEmpty ? 'Серверы не найдены' : '';
+      });
+    } catch (e) {
+      setState(() => _error = 'Ошибка загрузки: $e');
+    }
+  }
+
+  Future<void> _saveSubUrl(String url) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('sub_url', url);
+    setState(() => _subUrl = url);
+    await _loadServers(url);
+  }
+
+  Future<void> _toggleConnect() async {
+    if (_connecting) return;
+    setState(() => _connecting = true);
+
+    try {
+      if (_connected) {
+        await _vless.stopVless();
+        setState(() {
+          _connected = false;
+          _connecting = false;
+        });
+        return;
+      }
+
+      if (_servers.isEmpty) {
+        setState(() {
+          _error = 'Нет серверов. Введи ссылку подписки.';
+          _connecting = false;
+        });
+        return;
+      }
+
+      final selected = _servers[_selectedIdx];
+      final config = selected.getFullConfiguration();
+
+      if (await _vless.requestPermission()) {
+        await _vless.startVless(
+          remark: selected.remark ?? 'THEK Server',
+          config: config,
+        );
+        setState(() => _connected = true);
+      }
+    } catch (e) {
+      setState(() => _error = 'Ошибка: $e');
+    } finally {
+      setState(() => _connecting = false);
+    }
+  }
+
+  void _showSubUrlDialog() {
+    final ctrl = TextEditingController(text: _subUrl);
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF1A1D24),
+        title: const Text('Ссылка подписки', style: TextStyle(color: Colors.white)),
+        content: TextField(
+          controller: ctrl,
+          style: const TextStyle(color: Colors.white),
+          decoration: InputDecoration(
+            hintText: 'http://.../clash/sub_xxx',
+            hintStyle: const TextStyle(color: Color(0xFF8B95A5)),
+            enabledBorder: OutlineInputBorder(
+              borderSide: BorderSide(color: Colors.white.withOpacity(0.1)),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderSide: const BorderSide(color: Color(0xFF3B82F6)),
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Отмена', style: TextStyle(color: Color(0xFF8B95A5))),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF3B82F6)),
+            onPressed: () {
+              final url = ctrl.text.trim();
+              Navigator.pop(context);
+              if (url.isNotEmpty) _saveSubUrl(url);
+            },
+            child: const Text('Сохранить'),
+          ),
+        ],
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_loading) {
-      return const Scaffold(
-        body: Center(
-          child: CircularProgressIndicator(color: Color(0xFF3B82F6)),
-        ),
-      );
-    }
-
     return Scaffold(
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(20),
           child: Column(
             children: [
-              // Header
               Row(
                 children: [
-                  Container(
-                    width: 48,
-                    height: 48,
-                    decoration: const BoxDecoration(
-                      shape: BoxShape.circle,
-                      gradient: LinearGradient(
-                        colors: [Color(0xFF3B82F6), Color(0xFF8B5CF6)],
-                      ),
-                    ),
-                    child: Center(
-                      child: Text(
-                        _userName[0].toUpperCase(),
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 20,
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          _userName,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        Text(
-                          'Баланс: ${_balance.toStringAsFixed(0)} ₽',
-                          style: const TextStyle(
-                            color: Color(0xFF8B95A5),
-                            fontSize: 13,
-                          ),
-                        ),
-                      ],
-                    ),
+                  const Text('THEK', style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
+                  const Spacer(),
+                  IconButton(
+                    icon: const Icon(Icons.settings, color: Color(0xFF8B95A5)),
+                    onPressed: _showSubUrlDialog,
                   ),
                 ],
               ),
               const Spacer(),
 
-              // Big Connect Button
               GestureDetector(
                 onTap: _toggleConnect,
                 child: AnimatedContainer(
@@ -173,15 +209,19 @@ class _HomeScreenState extends State<HomeScreen> {
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     gradient: RadialGradient(
-                      colors: _connected
-                          ? [const Color(0xFF22C55E), const Color(0xFF16A34A)]
-                          : [const Color(0xFF3B82F6), const Color(0xFF8B5CF6)],
+                      colors: _connecting
+                          ? [Colors.orange, Colors.deepOrange]
+                          : _connected
+                              ? [const Color(0xFF22C55E), const Color(0xFF16A34A)]
+                              : [const Color(0xFF3B82F6), const Color(0xFF8B5CF6)],
                     ),
                     boxShadow: [
                       BoxShadow(
-                        color: (_connected
-                                ? const Color(0xFF22C55E)
-                                : const Color(0xFF3B82F6))
+                        color: (_connecting
+                                ? Colors.orange
+                                : _connected
+                                    ? const Color(0xFF22C55E)
+                                    : const Color(0xFF3B82F6))
                             .withOpacity(0.4),
                         blurRadius: 40,
                         spreadRadius: 5,
@@ -191,20 +231,13 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(
-                        Icons.power_settings_new,
-                        color: Colors.white,
-                        size: 72,
-                      ),
+                      _connecting
+                          ? const CircularProgressIndicator(color: Colors.white)
+                          : const Icon(Icons.power_settings_new, color: Colors.white, size: 72),
                       const SizedBox(height: 8),
                       Text(
-                        _connected ? 'ОТКЛЮЧИТЬ' : 'ПОДКЛЮЧИТЬ',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 13,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 1,
-                        ),
+                        _connecting ? 'ПОДКЛЮЧЕНИЕ...' : _connected ? 'ОТКЛЮЧИТЬ' : 'ПОДКЛЮЧИТЬ',
+                        style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold, letterSpacing: 1),
                       ),
                     ],
                   ),
@@ -213,95 +246,84 @@ class _HomeScreenState extends State<HomeScreen> {
 
               const SizedBox(height: 24),
               Text(
-                _connected ? 'Защищено' : 'Не защищено',
+                _connected ? '✅ Защищено' : '❌ Не защищено',
                 style: TextStyle(
-                  color: _connected
-                      ? const Color(0xFF22C55E)
-                      : const Color(0xFF8B95A5),
+                  color: _connected ? const Color(0xFF22C55E) : const Color(0xFF8B95A5),
                   fontSize: 16,
                   fontWeight: FontWeight.w600,
                 ),
               ),
+
               const Spacer(),
 
-              // Subscription card
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF1A1D24),
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: Colors.white.withOpacity(0.05)),
+              if (_error.isNotEmpty)
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  margin: const EdgeInsets.only(bottom: 12),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFEF4444).withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(_error, style: const TextStyle(color: Color(0xFFEF4444), fontSize: 12)),
                 ),
-                child: Row(
-                  children: [
-                    const Text('📦', style: TextStyle(fontSize: 28)),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            _tariff,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 15,
-                            ),
-                          ),
-                          Text(
-                            'Осталось $_daysLeft дней',
-                            style: const TextStyle(
-                              color: Color(0xFF8B95A5),
-                              fontSize: 13,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const Icon(Icons.chevron_right, color: Color(0xFF8B95A5)),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 12),
 
-              // Servers button
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF1A1D24),
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: Colors.white.withOpacity(0.05)),
-                ),
-                child: Row(
-                  children: [
-                    const Text('🌍', style: TextStyle(fontSize: 28)),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
+              if (_servers.isNotEmpty)
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1A1D24),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: Colors.white.withOpacity(0.05)),
+                  ),
+                  child: Column(
+                    children: [
+                      Row(
                         children: [
-                          const Text(
-                            'Серверы',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 15,
+                          const Text('🌍', style: TextStyle(fontSize: 24)),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              _servers[_selectedIdx].remark ?? 'Сервер ${_selectedIdx + 1}',
+                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                             ),
                           ),
-                          Text(
-                            '${_servers.length} доступно',
-                            style: const TextStyle(
-                              color: Color(0xFF8B95A5),
-                              fontSize: 13,
-                            ),
-                          ),
+                          Text('${_servers.length} шт.', style: const TextStyle(color: Color(0xFF8B95A5), fontSize: 13)),
                         ],
                       ),
-                    ),
-                    const Icon(Icons.chevron_right, color: Color(0xFF8B95A5)),
-                  ],
+                      if (_servers.length > 1)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 8),
+                          child: DropdownButton<int>(
+                            value: _selectedIdx,
+                            isExpanded: true,
+                            dropdownColor: const Color(0xFF1A1D24),
+                            style: const TextStyle(color: Colors.white),
+                            items: List.generate(_servers.length, (i) => DropdownMenuItem(
+                              value: i,
+                              child: Text(_servers[i].remark ?? 'Сервер ${i + 1}'),
+                            )),
+                            onChanged: (i) => setState(() => _selectedIdx = i!),
+                          ),
+                        ),
+                    ],
+                  ),
+                )
+              else
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1A1D24),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: Colors.white.withOpacity(0.05)),
+                  ),
+                  child: const Row(
+                    children: [
+                      Text('📡', style: TextStyle(fontSize: 24)),
+                      SizedBox(width: 12),
+                      Expanded(child: Text('Нажми ⚙️ чтобы ввести ссылку подписки', style: TextStyle(color: Color(0xFF8B95A5)))),
+                    ],
+                  ),
                 ),
-              ),
             ],
           ),
         ),

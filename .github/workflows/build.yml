@@ -28,6 +28,11 @@ jobs:
         run: |
           flutter create --org com.thek --project-name thek --platforms=android .
 
+      - name: Fix Kotlin version
+        run: |
+          sed -i "s|id \"org.jetbrains.kotlin.android\" version \"[^\"]*\"|id \"org.jetbrains.kotlin.android\" version \"1.9.24\"|" android/settings.gradle
+          sed -i "s|id \"org.jetbrains.kotlin.android\" version \"[^\"]*\"|id \"org.jetbrains.kotlin.android\" version \"1.9.24\"|" android/settings.gradle.kts 2>/dev/null || true
+
       - name: Get dependencies
         run: flutter pub get
 

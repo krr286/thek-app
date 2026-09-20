@@ -149,7 +149,7 @@ class _HomeScreenState extends State<HomeScreen> {
           controller: ctrl,
           style: const TextStyle(color: Colors.white),
           decoration: InputDecoration(
-            hintText: 'http://.../clash/sub_xxx',
+            hintText: 'http://77.239.101.146:8080/clash/sub_xxx',
             hintStyle: const TextStyle(color: Color(0xFF8B95A5)),
             enabledBorder: OutlineInputBorder(
               borderSide: BorderSide(color: Colors.white.withOpacity(0.1)),

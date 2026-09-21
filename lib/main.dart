@@ -39,17 +39,7 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  final V2ray _v2ray = V2ray(
-    onStatusChanged: (status) {
-      debugPrint('V2Ray status: ${status.state}');
-      if (mounted) {
-        setState(() {
-          _connected = status.state == 'CONNECTED';
-          _connecting = false;
-        });
-      }
-    },
-  );
+  late final V2ray _v2ray;
 
   bool _connected = false;
   bool _connecting = false;
@@ -61,6 +51,15 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    _v2ray = V2ray(
+      onStatusChanged: (status) {
+        if (!mounted) return;
+        setState(() {
+          _connected = status.state == 'CONNECTED';
+          _connecting = false;
+        });
+      },
+    );
     _initV2Ray();
     _loadSubUrl();
   }
@@ -86,7 +85,6 @@ class _HomeScreenState extends State<HomeScreen> {
       final res = await http.get(Uri.parse(url));
       if (res.statusCode != 200) throw Exception('HTTP ${res.statusCode}');
 
-      // Пробуем декодировать Base64
       String decoded;
       try {
         decoded = utf8.decode(base64.decode(res.body.trim()));
@@ -152,7 +150,6 @@ class _HomeScreenState extends State<HomeScreen> {
           config: config,
           proxyOnly: false,
         );
-        // Статус придёт через onStatusChanged
       } else {
         setState(() {
           _error = 'Разрешение VPN не получено';

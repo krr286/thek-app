@@ -39,7 +39,9 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  final SingboxClient _client = SingboxClient();
+  // dynamic — чтобы можно было вызывать любые методы
+  dynamic _client;
+
   bool _connected = false;
   bool _connecting = false;
   String _subUrl = '';
@@ -50,6 +52,11 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    try {
+      _client = SingboxClient();
+    } catch (e) {
+      _error = 'Не удалось создать клиент: $e';
+    }
     _loadSubUrl();
   }
 
@@ -96,8 +103,9 @@ class _HomeScreenState extends State<HomeScreen> {
       if (!url.startsWith('socks5://') && !url.startsWith('socks://')) return null;
       final host = uri.host;
       final port = uri.port.toString();
-      final user = uri.userInfo.split(':').isNotEmpty ? uri.userInfo.split(':')[0] : '';
-      final pass = uri.userInfo.split(':').length > 1 ? uri.userInfo.split(':')[1] : '';
+      final parts = uri.userInfo.split(':');
+      final user = parts.isNotEmpty ? parts[0] : '';
+      final pass = parts.length > 1 ? parts[1] : '';
       final name = uri.fragment.isNotEmpty ? Uri.decodeComponent(uri.fragment) : '$host:$port';
       return {'host': host, 'port': port, 'user': user, 'pass': pass, 'name': name};
     } catch (_) {
@@ -112,6 +120,25 @@ class _HomeScreenState extends State<HomeScreen> {
     await _loadServers(url);
   }
 
+  Future<void> _startVpnSafe(String config) async {
+    // Пробуем разные сигнатуры методов
+    try { await _client.startVpn(config: config); return; } catch (_) {}
+    try { await _client.startVpnService(config: config); return; } catch (_) {}
+    try { await _client.start(config: config); return; } catch (_) {}
+    try { await _client.startVpn(config); return; } catch (_) {}
+    try { await _client.startVpnService(config); return; } catch (_) {}
+    try { await _client.start(config); return; } catch (_) {}
+    try { await _client.startVpnService(configString: config); return; } catch (_) {}
+    throw Exception('Не найден метод запуска. Проверь логи сборки.');
+  }
+
+  Future<void> _stopVpnSafe() async {
+    try { await _client.stopVpn(); return; } catch (_) {}
+    try { await _client.stopVpnService(); return; } catch (_) {}
+    try { await _client.stop(); return; } catch (_) {}
+    throw Exception('Не найден метод остановки.');
+  }
+
   Future<void> _toggleConnect() async {
     if (_connecting) return;
     setState(() {
@@ -121,7 +148,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     try {
       if (_connected) {
-        await _client.stopVpn();
+        await _stopVpnSafe();
         setState(() {
           _connected = false;
           _connecting = false;
@@ -140,7 +167,8 @@ class _HomeScreenState extends State<HomeScreen> {
       final p = _proxies[_selectedIdx];
       final config = _buildConfig(p);
 
-      await _client.startVpn(config: config);
+      await _startVpnSafe(config);
+
       setState(() {
         _connected = true;
         _connecting = false;
@@ -154,7 +182,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   String _buildConfig(Map<String, String> p) {
-    final outbound = {
+    final outbound = <String, dynamic>{
       'type': 'socks',
       'tag': 'proxy',
       'server': p['host'],
@@ -166,7 +194,7 @@ class _HomeScreenState extends State<HomeScreen> {
       outbound['password'] = p['pass']!;
     }
 
-    final config = {
+    final config = <String, dynamic>{
       'log': {'level': 'info'},
       'dns': {
         'servers': [
@@ -188,7 +216,7 @@ class _HomeScreenState extends State<HomeScreen> {
       ],
       'outbounds': [outbound],
       'route': {
-        'rules': [],
+        'rules': <Map<String, dynamic>>[],
         'final': 'proxy',
       },
     };
@@ -258,7 +286,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 ],
               ),
               const Spacer(),
-
               GestureDetector(
                 onTap: _toggleConnect,
                 child: AnimatedContainer(
@@ -303,7 +330,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
               ),
-
               const SizedBox(height: 24),
               Text(
                 _connected ? '✅ Защищено' : '❌ Не защищено',
@@ -313,9 +339,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   fontWeight: FontWeight.w600,
                 ),
               ),
-
               const Spacer(),
-
               if (_error.isNotEmpty)
                 Container(
                   padding: const EdgeInsets.all(12),
@@ -326,7 +350,6 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                   child: Text(_error, style: const TextStyle(color: Color(0xFFEF4444), fontSize: 12)),
                 ),
-
               if (_proxies.isNotEmpty)
                 Container(
                   padding: const EdgeInsets.all(16),

@@ -27,48 +27,35 @@ jobs:
           channel: 'stable'
 
       - name: Generate Android structure
-        run: |
-          flutter create --org com.thek --project-name thek --platforms=android .
+        run: flutter create --org com.thek --project-name thek --platforms=android .
 
       - name: Get dependencies
         run: flutter pub get
 
-      - name: Patch flutter_vless HEAVY
+      - name: Patch flutter_vless
         run: |
-          set -e
-          FOUND=0
-          while IFS= read -r f; do
-            echo "=== FOUND: $f ==="
-            cp "$f" "${f}.bak"
-            # Все возможные вариации packaging
-            sed -i 's/\bpackaging\b/packagingOptions/g' "$f"
-            sed -i 's/packagingOptionsOptions/packagingOptions/g' "$f"
-            # SDK versions
-            sed -i 's/compileSdk[^0-9]*[0-9]\+/compileSdk 34/g' "$f"
-            sed -i 's/targetSdk[^0-9]*[0-9]\+/targetSdk 34/g' "$f"
-            sed -i 's/minSdk[^0-9]*[0-9]\+/minSdk 21/g' "$f"
-            sed -i 's/compileSdkVersion [0-9]\+/compileSdkVersion 34/g' "$f"
-            sed -i 's/targetSdkVersion [0-9]\+/targetSdkVersion 34/g' "$f"
-            sed -i 's/minSdkVersion [0-9]\+/minSdkVersion 21/g' "$f"
-            echo "--- AFTER ---"
-            cat "$f"
-            FOUND=1
-          done < <(find /home/runner/.pub-cache -path "*flutter_vless_android*" -name "build.gradle" 2>/dev/null)
-          if [ $FOUND -eq 0 ]; then
-            echo "!!! flutter_vless_android build.gradle NOT FOUND !!!"
-            find /home/runner/.pub-cache -path "*flutter_vless*" -name "*.gradle*" 2>/dev/null | head -20
-            exit 1
-          fi
+          find /home/runner/.pub-cache -path "*flutter_vless_android*" -name "build.gradle" -exec sed -i 's/\bpackaging\b/packagingOptions/g' {} \;
+          find /home/runner/.pub-cache -path "*flutter_vless_android*" -name "build.gradle" -exec sed -i 's/packagingOptionsOptions/packagingOptions/g' {} \;
+          find /home/runner/.pub-cache -path "*flutter_vless_android*" -name "build.gradle" -exec sed -i 's/compileSdk[^0-9]*[0-9]\+/compileSdk 34/g' {} \;
+
+      - name: Patch Kotlin
+        run: |
+          sed -i -E 's/id\("org.jetbrains.kotlin.android"\) version "[^"]*"/id("org.jetbrains.kotlin.android") version "1.9.24"/g' android/settings.gradle.kts 2>/dev/null || true
+          sed -i -E 's/id "org.jetbrains.kotlin.android" version "[^"]*"/id "org.jetbrains.kotlin.android" version "1.9.24"/g' android/settings.gradle 2>/dev/null || true
 
       - name: Build APK
-        run: flutter build apk --release --verbose 2>&1 | tail -100
+        run: flutter build apk --release
+
+      - name: Verify APK exists
+        run: |
+          ls -la build/app/outputs/flutter-apk/
+          test -f build/app/outputs/flutter-apk/app-release.apk
 
       - name: Create Release
-        if: success()
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v2.0.${{ github.run_number }}
-          name: THEK v2.0.${{ github.run_number }}
+          tag_name: v2.1.${{ github.run_number }}
+          name: THEK v2.1.${{ github.run_number }}
           files: build/app/outputs/flutter-apk/app-release.apk
           draft: false
           prerelease: false

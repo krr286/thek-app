@@ -34,9 +34,8 @@ jobs:
           sed -i 's|gradle-[0-9.]*-all.zip|gradle-8.9-all.zip|g' android/gradle/wrapper/gradle-wrapper.properties
           sed -i 's|gradle-[0-9.]*-bin.zip|gradle-8.9-bin.zip|g' android/gradle/wrapper/gradle-wrapper.properties
 
-      - name: Patch SDK 35 + NDK 26 + Kotlin + AGP
+      - name: Patch SDK + NDK + Kotlin + AGP
         run: |
-          # Заменяем ссылки flutter.* на конкретные значения
           for f in android/app/build.gradle android/app/build.gradle.kts; do
             if [ -f "$f" ]; then
               sed -i -E 's/compileSdk[[:space:]]*=[[:space:]]*flutter\.compileSdkVersion/compileSdk = 35/g' "$f"
@@ -47,21 +46,12 @@ jobs:
               sed -i -E 's/minSdkVersion[[:space:]]+flutter\.minSdkVersion/minSdkVersion 23/g' "$f"
               sed -i -E 's/ndkVersion[[:space:]]*=[[:space:]]*flutter\.ndkVersion/ndkVersion = "26.1.10909125"/g' "$f"
               sed -i -E 's/ndkVersion[[:space:]]+flutter\.ndkVersion/ndkVersion "26.1.10909125"/g' "$f"
-            fi
-          done
-          # На случай, если в файле уже числа
-          for f in android/app/build.gradle android/app/build.gradle.kts; do
-            if [ -f "$f" ]; then
               sed -i -E 's/compileSdk[[:space:]]*=[[:space:]]*[0-9]+/compileSdk = 35/g' "$f"
-              sed -i -E 's/compileSdkVersion[[:space:]]+[0-9]+/compileSdkVersion 35/g' "$f"
               sed -i -E 's/targetSdk[[:space:]]*=[[:space:]]*[0-9]+/targetSdk = 35/g' "$f"
-              sed -i -E 's/targetSdkVersion[[:space:]]+[0-9]+/targetSdkVersion 35/g' "$f"
               sed -i -E 's/minSdk[[:space:]]*=[[:space:]]*[0-9]+/minSdk = 23/g' "$f"
-              sed -i -E 's/minSdkVersion[[:space:]]+[0-9]+/minSdkVersion 23/g' "$f"
               sed -i -E 's/ndkVersion[[:space:]]*=[[:space:]]*"[^"]*"/ndkVersion = "26.1.10909125"/g' "$f"
             fi
           done
-          # Settings.gradle
           if [ -f android/settings.gradle ]; then
             sed -i -E 's/id "org\.jetbrains\.kotlin\.android" version "[^"]*"/id "org.jetbrains.kotlin.android" version "2.0.21"/g' android/settings.gradle
             sed -i -E 's/id "com\.android\.application" version "[^"]*"/id "com.android.application" version "8.5.2"/g' android/settings.gradle
@@ -73,20 +63,17 @@ jobs:
           if [ -f android/build.gradle ]; then
             sed -i -E "s/ext\.kotlin_version = '[^']*'/ext.kotlin_version = '2.0.21'/g" android/build.gradle
           fi
-          echo "===== app/build.gradle (after patch) ====="
-          cat android/app/build.gradle 2>/dev/null | head -40 || true
 
       - name: Get dependencies
         run: flutter pub get
 
-      - name: Inspect SingboxClient API (debug)
+      - name: Show SessionOptions API
         run: |
-          echo "===== PUBLIC METHODS OF SingboxClient ====="
-          CLIENT_FILE=$(find /home/runner/.pub-cache -path "*flutter_singbox_client*" -name "singbox_client.dart" | head -1)
-          echo "FILE: $CLIENT_FILE"
-          grep -E "^\s+(Future|Stream|void|bool|String)" "$CLIENT_FILE" | head -40 || true
-          echo "===== ALL DART FILES ====="
-          find /home/runner/.pub-cache -path "*flutter_singbox_client*" -name "*.dart" | head -20
+          echo "===== SessionOptions ====="
+          cat /home/runner/.pub-cache/hosted/pub.dev/flutter_singbox_client-1.1.0/lib/src/models/session_options.dart || true
+          echo ""
+          echo "===== EngineOptions ====="
+          cat /home/runner/.pub-cache/hosted/pub.dev/flutter_singbox_client-1.1.0/lib/src/models/engine_options.dart || true
 
       - name: Patch flutter_singbox_client packaging
         run: |
@@ -102,8 +89,8 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v11.0.${{ github.run_number }}
-          name: THEK v11.0.${{ github.run_number }}
+          tag_name: v12.0.${{ github.run_number }}
+          name: THEK v12.0.${{ github.run_number }}
           files: build/app/outputs/flutter-apk/app-release.apk
           draft: false
           prerelease: false

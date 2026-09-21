@@ -1,6 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:flutter_v2ray_client/flutter_v2ray.dart';
+import 'package:flutter_sing_box/flutter_sing_box.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -39,36 +39,17 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  late final V2ray _v2ray;
-
   bool _connected = false;
   bool _connecting = false;
   String _subUrl = '';
-  List<V2RayURL> _servers = [];
+  List<Map<String, String>> _proxies = [];
   int _selectedIdx = 0;
   String _error = '';
 
   @override
   void initState() {
     super.initState();
-    _v2ray = V2ray(
-      onStatusChanged: (status) {
-        if (!mounted) return;
-        setState(() {
-          _connected = status.state == 'CONNECTED';
-          _connecting = false;
-        });
-      },
-    );
-    _initV2Ray();
     _loadSubUrl();
-  }
-
-  Future<void> _initV2Ray() async {
-    await _v2ray.initialize(
-      notificationIconResourceType: "mipmap",
-      notificationIconResourceName: "ic_launcher",
-    );
   }
 
   Future<void> _loadSubUrl() async {
@@ -93,19 +74,34 @@ class _HomeScreenState extends State<HomeScreen> {
       }
 
       final links = decoded.split('\n').where((l) => l.trim().isNotEmpty).toList();
-      final servers = <V2RayURL>[];
+      final proxies = <Map<String, String>>[];
       for (final link in links) {
-        try {
-          servers.add(V2ray.parseFromURL(link.trim()));
-        } catch (_) {}
+        final parsed = _parseSocks5(link.trim());
+        if (parsed != null) proxies.add(parsed);
       }
 
       setState(() {
-        _servers = servers;
-        _error = servers.isEmpty ? 'Серверы не найдены' : '';
+        _proxies = proxies;
+        _error = proxies.isEmpty ? 'Прокси не найдены' : '';
       });
     } catch (e) {
       setState(() => _error = 'Ошибка загрузки: $e');
+    }
+  }
+
+  Map<String, String>? _parseSocks5(String url) {
+    try {
+      // Формат: socks5://user:pass@host:port#name
+      final uri = Uri.parse(url);
+      if (!url.startsWith('socks5://') && !url.startsWith('socks://')) return null;
+      final host = uri.host;
+      final port = uri.port.toString();
+      final user = uri.userInfo.split(':').isNotEmpty ? uri.userInfo.split(':')[0] : '';
+      final pass = uri.userInfo.split(':').length > 1 ? uri.userInfo.split(':')[1] : '';
+      final name = uri.fragment.isNotEmpty ? Uri.decodeComponent(uri.fragment) : '$host:$port';
+      return {'host': host, 'port': port, 'user': user, 'pass': pass, 'name': name};
+    } catch (_) {
+      return null;
     }
   }
 
@@ -125,7 +121,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     try {
       if (_connected) {
-        await _v2ray.stopV2Ray();
+        await FlutterSingBox().stopVpn();
         setState(() {
           _connected = false;
           _connecting = false;
@@ -133,35 +129,73 @@ class _HomeScreenState extends State<HomeScreen> {
         return;
       }
 
-      if (_servers.isEmpty) {
+      if (_proxies.isEmpty) {
         setState(() {
-          _error = 'Нет серверов. Введи ссылку подписки.';
+          _error = 'Нет прокси. Введи ссылку подписки.';
           _connecting = false;
         });
         return;
       }
 
-      final selected = _servers[_selectedIdx];
-      final config = selected.getFullConfiguration();
+      final p = _proxies[_selectedIdx];
+      final config = _buildConfig(p);
 
-      if (await _v2ray.requestPermission()) {
-        await _v2ray.startV2Ray(
-          remark: selected.remark,
-          config: config,
-          proxyOnly: false,
-        );
-      } else {
-        setState(() {
-          _error = 'Разрешение VPN не получено';
-          _connecting = false;
-        });
-      }
+      await FlutterSingBox().saveConfig(config);
+      await FlutterSingBox().startVpn();
+
+      setState(() {
+        _connected = true;
+        _connecting = false;
+      });
     } catch (e) {
       setState(() {
         _error = 'Ошибка: $e';
         _connecting = false;
       });
     }
+  }
+
+  String _buildConfig(Map<String, String> p) {
+    final outbound = {
+      'type': 'socks',
+      'tag': 'proxy',
+      'server': p['host'],
+      'server_port': int.parse(p['port']!),
+      'version': '5',
+    };
+    if ((p['user'] ?? '').isNotEmpty) {
+      outbound['username'] = p['user']!;
+      outbound['password'] = p['pass']!;
+    }
+
+    final config = {
+      'log': {'level': 'info', 'timestamp': true},
+      'dns': {
+        'servers': [
+          {'tag': 'cf', 'address': '1.1.1.1'},
+          {'tag': 'google', 'address': '8.8.8.8'},
+        ]
+      },
+      'inbounds': [
+        {
+          'type': 'tun',
+          'tag': 'tun-in',
+          'inet4_address': '172.19.0.1/30',
+          'mtu': 9000,
+          'auto_route': true,
+          'strict_route': true,
+          'stack': 'system',
+          'sniff': true,
+        }
+      ],
+      'outbounds': [outbound],
+      'route': {
+        'rules': [],
+        'final': 'proxy',
+      },
+    };
+
+    return jsonEncode(config);
   }
 
   void _showSubUrlDialog() {
@@ -295,7 +329,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: Text(_error, style: const TextStyle(color: Color(0xFFEF4444), fontSize: 12)),
                 ),
 
-              if (_servers.isNotEmpty)
+              if (_proxies.isNotEmpty)
                 Container(
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
@@ -311,14 +345,14 @@ class _HomeScreenState extends State<HomeScreen> {
                           const SizedBox(width: 12),
                           Expanded(
                             child: Text(
-                              _servers[_selectedIdx].remark,
+                              _proxies[_selectedIdx]['name'] ?? 'Прокси',
                               style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                             ),
                           ),
-                          Text('${_servers.length} шт.', style: const TextStyle(color: Color(0xFF8B95A5), fontSize: 13)),
+                          Text('${_proxies.length} шт.', style: const TextStyle(color: Color(0xFF8B95A5), fontSize: 13)),
                         ],
                       ),
-                      if (_servers.length > 1)
+                      if (_proxies.length > 1)
                         Padding(
                           padding: const EdgeInsets.only(top: 8),
                           child: DropdownButton<int>(
@@ -326,9 +360,9 @@ class _HomeScreenState extends State<HomeScreen> {
                             isExpanded: true,
                             dropdownColor: const Color(0xFF1A1D24),
                             style: const TextStyle(color: Colors.white),
-                            items: List.generate(_servers.length, (i) => DropdownMenuItem(
+                            items: List.generate(_proxies.length, (i) => DropdownMenuItem(
                               value: i,
-                              child: Text(_servers[i].remark),
+                              child: Text(_proxies[i]['name'] ?? 'Прокси ${i + 1}'),
                             )),
                             onChanged: (i) => setState(() => _selectedIdx = i!),
                           ),

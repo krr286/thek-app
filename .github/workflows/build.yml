@@ -33,16 +33,12 @@ jobs:
         run: |
           sed -i 's|gradle-[0-9.]*-all.zip|gradle-8.9-all.zip|g' android/gradle/wrapper/gradle-wrapper.properties
           sed -i 's|gradle-[0-9.]*-bin.zip|gradle-8.9-bin.zip|g' android/gradle/wrapper/gradle-wrapper.properties
-          echo "===== gradle-wrapper.properties ====="
-          cat android/gradle/wrapper/gradle-wrapper.properties
 
-      - name: Patch Android SDK to 35
+      - name: Patch SDK to 35 + Kotlin + AGP
         run: |
           if [ -f android/app/build.gradle ]; then
             sed -i -E 's/compileSdk[[:space:]]*=[[:space:]]*[0-9]+/compileSdk = 35/g' android/app/build.gradle
-            sed -i -E 's/compileSdkVersion[[:space:]]+[0-9]+/compileSdkVersion 35/g' android/app/build.gradle
             sed -i -E 's/targetSdk[[:space:]]*=[[:space:]]*[0-9]+/targetSdk = 35/g' android/app/build.gradle
-            sed -i -E 's/targetSdkVersion[[:space:]]+[0-9]+/targetSdkVersion 35/g' android/app/build.gradle
             sed -i -E 's/minSdk[[:space:]]*=[[:space:]]*[0-9]+/minSdk = 21/g' android/app/build.gradle
           fi
           if [ -f android/app/build.gradle.kts ]; then
@@ -50,9 +46,6 @@ jobs:
             sed -i -E 's/targetSdk[[:space:]]*=[[:space:]]*[0-9]+/targetSdk = 35/g' android/app/build.gradle.kts
             sed -i -E 's/minSdk[[:space:]]*=[[:space:]]*[0-9]+/minSdk = 21/g' android/app/build.gradle.kts
           fi
-
-      - name: Patch Kotlin + AGP
-        run: |
           if [ -f android/settings.gradle ]; then
             sed -i -E 's/id "org\.jetbrains\.kotlin\.android" version "[^"]*"/id "org.jetbrains.kotlin.android" version "2.0.21"/g' android/settings.gradle
             sed -i -E 's/id "com\.android\.application" version "[^"]*"/id "com.android.application" version "8.5.2"/g' android/settings.gradle
@@ -68,6 +61,11 @@ jobs:
       - name: Get dependencies
         run: flutter pub get
 
+      - name: Patch flutter_sing_box packaging
+        run: |
+          find /home/runner/.pub-cache -path "*flutter_sing_box*" -name "build.gradle" -exec sed -i 's/\bpackaging\b/packagingOptions/g' {} \;
+          find /home/runner/.pub-cache -path "*flutter_sing_box*" -name "build.gradle" -exec sed -i 's/packagingOptionsOptions/packagingOptions/g' {} \;
+
       - name: Build APK
         run: flutter build apk --release
 
@@ -77,8 +75,8 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v8.0.${{ github.run_number }}
-          name: THEK v8.0.${{ github.run_number }}
+          tag_name: v9.0.${{ github.run_number }}
+          name: THEK v9.0.${{ github.run_number }}
           files: build/app/outputs/flutter-apk/app-release.apk
           draft: false
           prerelease: false

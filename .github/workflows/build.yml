@@ -39,12 +39,30 @@ jobs:
           find /home/runner/.pub-cache -path "*flutter_vless_android*" -name "build.gradle" -exec sed -i 's/compileSdkVersion\s*[0-9]*/compileSdkVersion 34/g' {} \;
           find /home/runner/.pub-cache -path "*flutter_vless_android*" -name "build.gradle" -exec sed -i 's/targetSdkVersion\s*[0-9]*/targetSdkVersion 34/g' {} \;
 
-      - name: Patch Kotlin version in android/build.gradle
+      - name: DEBUG — show Android gradle files
         run: |
-          sed -i "s/ext.kotlin_version = '.*'/ext.kotlin_version = '1.9.24'/" android/build.gradle
-          sed -i "s/id \"org.jetbrains.kotlin.android\" version \"[^\"]*\"/id \"org.jetbrains.kotlin.android\" version \"1.9.24\"/g" android/settings.gradle
-          sed -i "s/id(\"org.jetbrains.kotlin.android\") version \"[^\"]*\"/id(\"org.jetbrains.kotlin.android\") version \"1.9.24\"/g" android/settings.gradle.kts 2>/dev/null || true
-          cat android/build.gradle | head -20
+          echo "===== android/build.gradle ====="
+          cat android/build.gradle 2>/dev/null || echo "NOT FOUND"
+          echo "===== android/settings.gradle ====="
+          cat android/settings.gradle 2>/dev/null || echo "NOT FOUND"
+          echo "===== android/settings.gradle.kts ====="
+          cat android/settings.gradle.kts 2>/dev/null || echo "NOT FOUND"
+
+      - name: Patch Kotlin everywhere
+        run: |
+          if [ -f android/settings.gradle.kts ]; then
+            sed -i -E 's/id\("org.jetbrains.kotlin.android"\) version "[^"]*"/id("org.jetbrains.kotlin.android") version "1.9.24"/g' android/settings.gradle.kts
+            sed -i -E 's/id\("com.android.application"\) version "[^"]*"/id("com.android.application") version "8.1.4"/g' android/settings.gradle.kts
+          fi
+          if [ -f android/settings.gradle ]; then
+            sed -i -E 's/id "org.jetbrains.kotlin.android" version "[^"]*"/id "org.jetbrains.kotlin.android" version "1.9.24"/g' android/settings.gradle
+          fi
+          if [ -f android/build.gradle ]; then
+            sed -i -E "s/ext.kotlin_version = '[^']*'/ext.kotlin_version = '1.9.24'/g" android/build.gradle
+            sed -i -E 's/ext.kotlin_version = "[^"]*"/ext.kotlin_version = "1.9.24"/g' android/build.gradle
+          fi
+          echo "===== AFTER PATCH ====="
+          cat android/settings.gradle.kts 2>/dev/null || cat android/settings.gradle 2>/dev/null || echo "nothing"
 
       - name: Build APK
         run: flutter build apk --release
@@ -52,8 +70,8 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.2.${{ github.run_number }}
-          name: THEK v1.2.${{ github.run_number }}
+          tag_name: v1.3.${{ github.run_number }}
+          name: THEK v1.3.${{ github.run_number }}
           files: build/app/outputs/flutter-apk/app-release.apk
           draft: false
           prerelease: false

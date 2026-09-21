@@ -158,7 +158,6 @@ class _HomeScreenState extends State<HomeScreen> {
       final p = _proxies[_selectedIdx];
       final config = _buildConfig(p);
 
-      // Проверяем конфиг перед запуском
       try {
         await _client.checkConfig(config);
       } catch (e) {
@@ -169,7 +168,6 @@ class _HomeScreenState extends State<HomeScreen> {
         return;
       }
 
-      // Запрашиваем разрешение на VPN
       final granted = await _client.requestVPNPermission();
       if (!granted) {
         setState(() {
@@ -179,7 +177,6 @@ class _HomeScreenState extends State<HomeScreen> {
         return;
       }
 
-      // Запускаем
       await _client.connect(
         SessionOptions(
           config: config,
@@ -219,12 +216,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
     final config = <String, dynamic>{
       'log': {'level': 'warn'},
-      'dns': {
-        'servers': [
-          {'tag': 'cf', 'address': '1.1.1.1'},
-          {'tag': 'google', 'address': '8.8.8.8'},
-        ]
-      },
       'inbounds': [
         {
           'type': 'tun',

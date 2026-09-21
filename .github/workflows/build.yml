@@ -29,17 +29,51 @@ jobs:
       - name: Generate Android structure
         run: flutter create --org com.thek --project-name thek --platforms=android .
 
+      - name: DEBUG - show settings.gradle
+        run: |
+          echo "===== android/settings.gradle ====="
+          cat android/settings.gradle 2>/dev/null || echo "NOT FOUND"
+          echo "===== android/settings.gradle.kts ====="
+          cat android/settings.gradle.kts 2>/dev/null || echo "NOT FOUND"
+
+      - name: Patch Kotlin + AGP version (both files, all formats)
+        run: |
+          # Патчим settings.gradle (старый формат)
+          if [ -f android/settings.gradle ]; then
+            sed -i -E 's/id "org\.jetbrains\.kotlin\.android" version "[^"]*"/id "org.jetbrains.kotlin.android" version "2.0.21"/g' android/settings.gradle
+            sed -i -E 's/id "com\.android\.application" version "[^"]*"/id "com.android.application" version "8.5.2"/g' android/settings.gradle
+          fi
+          # Патчим settings.gradle.kts (новый формат)
+          if [ -f android/settings.gradle.kts ]; then
+            sed -i -E 's/id\("org\.jetbrains\.kotlin\.android"\) version "[^"]*"/id("org.jetbrains.kotlin.android") version "2.0.21"/g' android/settings.gradle.kts
+            sed -i -E 's/id\("com\.android\.application"\) version "[^"]*"/id("com.android.application") version "8.5.2"/g' android/settings.gradle.kts
+          fi
+          # Патчим build.gradle для ext.kotlin_version
+          if [ -f android/build.gradle ]; then
+            sed -i -E "s/ext\.kotlin_version = '[^']*'/ext.kotlin_version = '2.0.21'/g" android/build.gradle
+          fi
+          # Патчим gradle-wrapper.properties — Gradle 8.9+
+          if [ -f android/gradle/wrapper/gradle-wrapper.properties ]; then
+            sed -i 's|gradle-[0-9.]*-all.zip|gradle-8.9-all.zip|g' android/gradle/wrapper/gradle-wrapper.properties
+            sed -i 's|gradle-[0-9.]*-bin.zip|gradle-8.9-bin.zip|g' android/gradle/wrapper/gradle-wrapper.properties
+          fi
+          echo "===== AFTER PATCH ====="
+          cat android/settings.gradle 2>/dev/null || cat android/settings.gradle.kts 2>/dev/null || echo "nothing"
+
       - name: Get dependencies
         run: flutter pub get
 
       - name: Build APK
         run: flutter build apk --release
 
+      - name: Verify APK
+        run: test -f build/app/outputs/flutter-apk/app-release.apk
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v5.0.${{ github.run_number }}
-          name: THEK v5.0.${{ github.run_number }}
+          tag_name: v6.0.${{ github.run_number }}
+          name: THEK v6.0.${{ github.run_number }}
           files: build/app/outputs/flutter-apk/app-release.apk
           draft: false
           prerelease: false

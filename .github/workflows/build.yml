@@ -23,19 +23,21 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.19.6'
+          flutter-version: '3.24.0'
           channel: 'stable'
 
       - name: Generate Android structure
         run: |
           flutter create --org com.thek --project-name thek --platforms=android .
 
-      - name: Fix Android packaging (flutter_vless fix)
-        run: |
-          sed -i '/android {/a\    packagingOptions { jniLibs { useLegacyPackaging = true } }' android/app/build.gradle
-
       - name: Get dependencies
         run: flutter pub get
+
+      - name: Patch flutter_vless for modern Gradle
+        run: |
+          find /home/runner/.pub-cache -path "*flutter_vless_android*" -name "build.gradle" -exec sed -i 's/packaging\s*{/packagingOptions {/g' {} \;
+          find /home/runner/.pub-cache -path "*flutter_vless_android*" -name "build.gradle" -exec sed -i 's/compileSdkVersion\s*[0-9]*/compileSdkVersion 34/g' {} \;
+          find /home/runner/.pub-cache -path "*flutter_vless_android*" -name "build.gradle" -exec sed -i 's/targetSdkVersion\s*[0-9]*/targetSdkVersion 34/g' {} \;
 
       - name: Build APK
         run: flutter build apk --release
@@ -43,8 +45,8 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.0.${{ github.run_number }}
-          name: THEK v1.0.${{ github.run_number }}
+          tag_name: v1.1.${{ github.run_number }}
+          name: THEK v1.1.${{ github.run_number }}
           files: build/app/outputs/flutter-apk/app-release.apk
           draft: false
           prerelease: false

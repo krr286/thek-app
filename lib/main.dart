@@ -1,6 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:flutter_sing_box/flutter_sing_box.dart';
+import 'package:flutter_singbox_client/flutter_singbox_client.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -39,6 +39,7 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  final SingboxClient _client = SingboxClient();
   bool _connected = false;
   bool _connecting = false;
   String _subUrl = '';
@@ -91,7 +92,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Map<String, String>? _parseSocks5(String url) {
     try {
-      // Формат: socks5://user:pass@host:port#name
       final uri = Uri.parse(url);
       if (!url.startsWith('socks5://') && !url.startsWith('socks://')) return null;
       final host = uri.host;
@@ -121,7 +121,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     try {
       if (_connected) {
-        await FlutterSingBox().stopVpn();
+        await _client.stopVpn();
         setState(() {
           _connected = false;
           _connecting = false;
@@ -140,9 +140,7 @@ class _HomeScreenState extends State<HomeScreen> {
       final p = _proxies[_selectedIdx];
       final config = _buildConfig(p);
 
-      await FlutterSingBox().saveConfig(config);
-      await FlutterSingBox().startVpn();
-
+      await _client.startVpn(config: config);
       setState(() {
         _connected = true;
         _connecting = false;
@@ -169,7 +167,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     final config = {
-      'log': {'level': 'info', 'timestamp': true},
+      'log': {'level': 'info'},
       'dns': {
         'servers': [
           {'tag': 'cf', 'address': '1.1.1.1'},
@@ -181,7 +179,7 @@ class _HomeScreenState extends State<HomeScreen> {
           'type': 'tun',
           'tag': 'tun-in',
           'inet4_address': '172.19.0.1/30',
-          'mtu': 9000,
+          'mtu': 1500,
           'auto_route': true,
           'strict_route': true,
           'stack': 'system',

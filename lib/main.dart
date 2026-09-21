@@ -39,11 +39,11 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  // dynamic — чтобы можно было вызывать любые методы
-  dynamic _client;
+  final SingboxClient _client = SingboxClient();
 
   bool _connected = false;
   bool _connecting = false;
+  bool _initDone = false;
   String _subUrl = '';
   List<Map<String, String>> _proxies = [];
   int _selectedIdx = 0;
@@ -52,12 +52,17 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    try {
-      _client = SingboxClient();
-    } catch (e) {
-      _error = 'Не удалось создать клиент: $e';
-    }
+    _initEngine();
     _loadSubUrl();
+  }
+
+  Future<void> _initEngine() async {
+    try {
+      await _client.initialize();
+      setState(() => _initDone = true);
+    } catch (e) {
+      setState(() => _error = 'Ошибка инициализации: $e');
+    }
   }
 
   Future<void> _loadSubUrl() async {
@@ -120,27 +125,13 @@ class _HomeScreenState extends State<HomeScreen> {
     await _loadServers(url);
   }
 
-  Future<void> _startVpnSafe(String config) async {
-    // Пробуем разные сигнатуры методов
-    try { await _client.startVpn(config: config); return; } catch (_) {}
-    try { await _client.startVpnService(config: config); return; } catch (_) {}
-    try { await _client.start(config: config); return; } catch (_) {}
-    try { await _client.startVpn(config); return; } catch (_) {}
-    try { await _client.startVpnService(config); return; } catch (_) {}
-    try { await _client.start(config); return; } catch (_) {}
-    try { await _client.startVpnService(configString: config); return; } catch (_) {}
-    throw Exception('Не найден метод запуска. Проверь логи сборки.');
-  }
-
-  Future<void> _stopVpnSafe() async {
-    try { await _client.stopVpn(); return; } catch (_) {}
-    try { await _client.stopVpnService(); return; } catch (_) {}
-    try { await _client.stop(); return; } catch (_) {}
-    throw Exception('Не найден метод остановки.');
-  }
-
   Future<void> _toggleConnect() async {
     if (_connecting) return;
+    if (!_initDone) {
+      setState(() => _error = 'Движок ещё не готов. Подожди пару секунд.');
+      return;
+    }
+
     setState(() {
       _connecting = true;
       _error = '';
@@ -148,7 +139,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     try {
       if (_connected) {
-        await _stopVpnSafe();
+        await _client.disconnect();
         setState(() {
           _connected = false;
           _connecting = false;
@@ -167,7 +158,39 @@ class _HomeScreenState extends State<HomeScreen> {
       final p = _proxies[_selectedIdx];
       final config = _buildConfig(p);
 
-      await _startVpnSafe(config);
+      // Проверяем конфиг перед запуском
+      try {
+        await _client.checkConfig(config);
+      } catch (e) {
+        setState(() {
+          _error = 'Ошибка конфига: $e';
+          _connecting = false;
+        });
+        return;
+      }
+
+      // Запрашиваем разрешение на VPN
+      final granted = await _client.requestVPNPermission();
+      if (!granted) {
+        setState(() {
+          _error = 'Разрешение VPN не получено';
+          _connecting = false;
+        });
+        return;
+      }
+
+      // Запускаем
+      await _client.connect(
+        SessionOptions(
+          config: config,
+          networkMode: NetworkMode.vpn,
+          killSwitch: false,
+          notification: const NotificationConfig(
+            title: 'THEK VPN',
+            showTrafficStats: true,
+          ),
+        ),
+      );
 
       setState(() {
         _connected = true;
@@ -195,7 +218,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     final config = <String, dynamic>{
-      'log': {'level': 'info'},
+      'log': {'level': 'warn'},
       'dns': {
         'servers': [
           {'tag': 'cf', 'address': '1.1.1.1'},
@@ -206,8 +229,8 @@ class _HomeScreenState extends State<HomeScreen> {
         {
           'type': 'tun',
           'tag': 'tun-in',
-          'inet4_address': '172.19.0.1/30',
-          'mtu': 1500,
+          'address': ['172.19.0.1/30'],
+          'mtu': 9000,
           'auto_route': true,
           'strict_route': true,
           'stack': 'system',

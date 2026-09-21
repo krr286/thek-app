@@ -1,13 +1,10 @@
-import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:flutter_sing_box/flutter_sing_box.dart';
+import 'package:flutter_v2ray_client/flutter_v2ray.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
-// Инициализация плагина
-void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  await FlutterSingBox().init();
+void main() {
   runApp(const ThekApp());
 }
 
@@ -42,17 +39,37 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  final V2ray _v2ray = V2ray(
+    onStatusChanged: (status) {
+      debugPrint('V2Ray status: ${status.state}');
+      if (mounted) {
+        setState(() {
+          _connected = status.state == 'CONNECTED';
+          _connecting = false;
+        });
+      }
+    },
+  );
+
   bool _connected = false;
   bool _connecting = false;
   String _subUrl = '';
-  String _error = '';
-  List<String> _servers = [];
+  List<V2RayURL> _servers = [];
   int _selectedIdx = 0;
+  String _error = '';
 
   @override
   void initState() {
     super.initState();
+    _initV2Ray();
     _loadSubUrl();
+  }
+
+  Future<void> _initV2Ray() async {
+    await _v2ray.initialize(
+      notificationIconResourceType: "mipmap",
+      notificationIconResourceName: "ic_launcher",
+    );
   }
 
   Future<void> _loadSubUrl() async {
@@ -68,14 +85,26 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       final res = await http.get(Uri.parse(url));
       if (res.statusCode != 200) throw Exception('HTTP ${res.statusCode}');
-      final content = res.body;
-      final lines = content.split('\n').where((l) => l.contains('server:')).toList();
+
+      // Пробуем декодировать Base64
+      String decoded;
+      try {
+        decoded = utf8.decode(base64.decode(res.body.trim()));
+      } catch (_) {
+        decoded = res.body;
+      }
+
+      final links = decoded.split('\n').where((l) => l.trim().isNotEmpty).toList();
+      final servers = <V2RayURL>[];
+      for (final link in links) {
+        try {
+          servers.add(V2ray.parseFromURL(link.trim()));
+        } catch (_) {}
+      }
+
       setState(() {
-        _servers = lines.map((l) {
-          final name = l.split('name:').last.trim().replaceAll('"', '');
-          return name.isEmpty ? 'Сервер ${lines.indexOf(l) + 1}' : name;
-        }).toList();
-        _error = '';
+        _servers = servers;
+        _error = servers.isEmpty ? 'Серверы не найдены' : '';
       });
     } catch (e) {
       setState(() => _error = 'Ошибка загрузки: $e');
@@ -98,7 +127,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     try {
       if (_connected) {
-        await FlutterSingBox().stopVpn();
+        await _v2ray.stopV2Ray();
         setState(() {
           _connected = false;
           _connecting = false;
@@ -114,59 +143,28 @@ class _HomeScreenState extends State<HomeScreen> {
         return;
       }
 
-      final config = _buildSingBoxConfig(_servers[_selectedIdx]);
-      
-      // Правильный API: сохраняем конфиг, потом стартуем
-      await FlutterSingBox().saveConfig(config);
-      await FlutterSingBox().startVpn();
+      final selected = _servers[_selectedIdx];
+      final config = selected.getFullConfiguration();
 
-      setState(() {
-        _connected = true;
-        _connecting = false;
-      });
+      if (await _v2ray.requestPermission()) {
+        await _v2ray.startV2Ray(
+          remark: selected.remark,
+          config: config,
+          proxyOnly: false,
+        );
+        // Статус придёт через onStatusChanged
+      } else {
+        setState(() {
+          _error = 'Разрешение VPN не получено';
+          _connecting = false;
+        });
+      }
     } catch (e) {
       setState(() {
         _error = 'Ошибка: $e';
         _connecting = false;
       });
     }
-  }
-
-  String _buildSingBoxConfig(String serverName) {
-    // В реальном приложении здесь будет парсинг Clash YAML.
-    // Пока плагин делает это сам, мы просто передаём ему ссылку на подписку.
-    // Но для примера соберём простой JSON.
-    return '''
-    {
-      "log": {"level": "info"},
-      "inbounds": [
-        {
-          "type": "tun",
-          "interface_name": "tun0",
-          "inet4_address": "172.19.0.1/30",
-          "auto_route": true,
-          "strict_route": true
-        }
-      ],
-      "outbounds": [
-        {
-          "type": "selector",
-          "tag": "proxy",
-          "outbounds": ["$serverName"]
-        },
-        {
-          "type": "socks",
-          "tag": "$serverName",
-          "server": "PLACEHOLDER",
-          "server_port": 1080
-        }
-      ],
-      "route": {
-        "rules": [],
-        "final": "proxy"
-      }
-    }
-    ''';
   }
 
   void _showSubUrlDialog() {
@@ -180,7 +178,7 @@ class _HomeScreenState extends State<HomeScreen> {
           controller: ctrl,
           style: const TextStyle(color: Colors.white),
           decoration: InputDecoration(
-            hintText: 'http://77.239.101.146:8080/clash/sub_xxx',
+            hintText: 'http://77.239.101.146:8080/sub/sub_xxx',
             hintStyle: const TextStyle(color: Color(0xFF8B95A5)),
             enabledBorder: OutlineInputBorder(
               borderSide: BorderSide(color: Colors.white.withOpacity(0.1)),
@@ -316,7 +314,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           const SizedBox(width: 12),
                           Expanded(
                             child: Text(
-                              _servers[_selectedIdx],
+                              _servers[_selectedIdx].remark,
                               style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                             ),
                           ),
@@ -333,7 +331,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             style: const TextStyle(color: Colors.white),
                             items: List.generate(_servers.length, (i) => DropdownMenuItem(
                               value: i,
-                              child: Text(_servers[i]),
+                              child: Text(_servers[i].remark),
                             )),
                             onChanged: (i) => setState(() => _selectedIdx = i!),
                           ),

@@ -27,21 +27,7 @@ jobs:
           channel: 'stable'
 
       - name: Generate Android structure
-        run: |
-          flutter create --org com.thek --project-name thek --platforms=android .
-          # Добавляем разрешения для VPN
-          sed -i '/<application/i \
-              <uses-permission android:name="android.permission.INTERNET"/>\
-              <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>\
-              <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>\
-              <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"/>\
-          ' android/app/src/main/AndroidManifest.xml
-          # Добавляем сервис VPN
-          sed -i '/<\/application>/i \
-              <service android:name="com.thek.app.VpnService" android:permission="android.permission.BIND_VPN_SERVICE" android:exported="false">\
-                  <intent-filter><action android:name="android.net.VpnService"/></intent-filter>\
-              </service>\
-          ' android/app/src/main/AndroidManifest.xml
+        run: flutter create --org com.thek --project-name thek --platforms=android .
 
       - name: Get dependencies
         run: flutter pub get
@@ -49,14 +35,11 @@ jobs:
       - name: Build APK
         run: flutter build apk --release
 
-      - name: Verify APK
-        run: test -f build/app/outputs/flutter-apk/app-release.apk
-
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v4.0.${{ github.run_number }}
-          name: THEK v4.0.${{ github.run_number }}
+          tag_name: v5.0.${{ github.run_number }}
+          name: THEK v5.0.${{ github.run_number }}
           files: build/app/outputs/flutter-apk/app-release.apk
           draft: false
           prerelease: false

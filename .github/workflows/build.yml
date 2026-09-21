@@ -39,14 +39,21 @@ jobs:
           find /home/runner/.pub-cache -path "*flutter_vless_android*" -name "build.gradle" -exec sed -i 's/compileSdkVersion\s*[0-9]*/compileSdkVersion 34/g' {} \;
           find /home/runner/.pub-cache -path "*flutter_vless_android*" -name "build.gradle" -exec sed -i 's/targetSdkVersion\s*[0-9]*/targetSdkVersion 34/g' {} \;
 
+      - name: Patch Kotlin version in android/build.gradle
+        run: |
+          sed -i "s/ext.kotlin_version = '.*'/ext.kotlin_version = '1.9.24'/" android/build.gradle
+          sed -i "s/id \"org.jetbrains.kotlin.android\" version \"[^\"]*\"/id \"org.jetbrains.kotlin.android\" version \"1.9.24\"/g" android/settings.gradle
+          sed -i "s/id(\"org.jetbrains.kotlin.android\") version \"[^\"]*\"/id(\"org.jetbrains.kotlin.android\") version \"1.9.24\"/g" android/settings.gradle.kts 2>/dev/null || true
+          cat android/build.gradle | head -20
+
       - name: Build APK
         run: flutter build apk --release
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.1.${{ github.run_number }}
-          name: THEK v1.1.${{ github.run_number }}
+          tag_name: v1.2.${{ github.run_number }}
+          name: THEK v1.2.${{ github.run_number }}
           files: build/app/outputs/flutter-apk/app-release.apk
           draft: false
           prerelease: false

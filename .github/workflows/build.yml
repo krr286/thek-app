@@ -23,43 +23,28 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.22.0'
+          flutter-version: '3.24.0'
           channel: 'stable'
 
       - name: Generate Android structure
-        run: flutter create --org com.thek --project-name thek --platforms=android .
-
-      - name: Show Android gradle files
         run: |
-          echo "=== ls android ==="
-          ls -la android/
-          echo "=== settings.gradle ==="
-          cat android/settings.gradle 2>/dev/null || echo "NOT FOUND"
-          echo "=== settings.gradle.kts ==="
-          cat android/settings.gradle.kts 2>/dev/null || echo "NOT FOUND"
+          flutter create --org com.thek --project-name thek --platforms=android .
+          # Добавляем разрешения для VPN
+          sed -i '/<application/i \
+              <uses-permission android:name="android.permission.INTERNET"/>\
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>\
+              <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>\
+              <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"/>\
+          ' android/app/src/main/AndroidManifest.xml
+          # Добавляем сервис VPN
+          sed -i '/<\/application>/i \
+              <service android:name="com.thek.app.VpnService" android:permission="android.permission.BIND_VPN_SERVICE" android:exported="false">\
+                  <intent-filter><action android:name="android.net.VpnService"/></intent-filter>\
+              </service>\
+          ' android/app/src/main/AndroidManifest.xml
 
       - name: Get dependencies
         run: flutter pub get
-
-      - name: Patch flutter_vless
-        run: |
-          find /home/runner/.pub-cache -path "*flutter_vless_android*" -name "build.gradle" -exec sed -i 's/\bpackaging\b/packagingOptions/g' {} \;
-          find /home/runner/.pub-cache -path "*flutter_vless_android*" -name "build.gradle" -exec sed -i 's/packagingOptionsOptions/packagingOptions/g' {} \;
-          find /home/runner/.pub-cache -path "*flutter_vless_android*" -name "build.gradle" -exec sed -i 's/compileSdk[^0-9]*[0-9]\+/compileSdk 34/g' {} \;
-
-      - name: Patch Kotlin (both formats)
-        run: |
-          if [ -f android/settings.gradle.kts ]; then
-            sed -i -E 's/id\("org\.jetbrains\.kotlin\.android"\)\s+version\s+"[^"]*"/id("org.jetbrains.kotlin.android") version "1.9.24"/g' android/settings.gradle.kts
-          fi
-          if [ -f android/settings.gradle ]; then
-            sed -i -E 's/id\s+"org\.jetbrains\.kotlin\.android"\s+version\s+"[^"]*"/id "org.jetbrains.kotlin.android" version "1.9.24"/g' android/settings.gradle
-          fi
-          if [ -f android/build.gradle ]; then
-            sed -i -E "s/ext\.kotlin_version\s*=\s*['\"][^'\"]*['\"]/ext.kotlin_version = '1.9.24'/g" android/build.gradle
-          fi
-          echo "=== AFTER PATCH ==="
-          cat android/settings.gradle.kts 2>/dev/null || cat android/settings.gradle 2>/dev/null || echo "nothing"
 
       - name: Build APK
         run: flutter build apk --release
@@ -70,8 +55,8 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v3.0.${{ github.run_number }}
-          name: THEK v3.0.${{ github.run_number }}
+          tag_name: v4.0.${{ github.run_number }}
+          name: THEK v4.0.${{ github.run_number }}
           files: build/app/outputs/flutter-apk/app-release.apk
           draft: false
           prerelease: false

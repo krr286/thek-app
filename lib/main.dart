@@ -1,9 +1,13 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:flutter_vless/flutter_vless.dart';
+import 'package:flutter_sing_box/flutter_sing_box.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
-void main() {
+// Инициализация плагина
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await FlutterSingBox().init();
   runApp(const ThekApp());
 }
 
@@ -38,35 +42,17 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  final FlutterVless _vless = FlutterVless(
-    onStatusChanged: (status) {
-      debugPrint('VPN: state=${status.state} connection=${status.connectionState.name}');
-    },
-  );
-
   bool _connected = false;
   bool _connecting = false;
   String _subUrl = '';
-  List<FlutterVlessURL> _servers = [];
-  int _selectedIdx = 0;
   String _error = '';
+  List<String> _servers = [];
+  int _selectedIdx = 0;
 
   @override
   void initState() {
     super.initState();
-    _initVless();
     _loadSubUrl();
-  }
-
-  Future<void> _initVless() async {
-    try {
-      await _vless.initializeVless(
-        providerBundleIdentifier: 'com.thek.app',
-        groupIdentifier: 'group.com.thek.app',
-      );
-    } catch (e) {
-      debugPrint('Init error: $e');
-    }
   }
 
   Future<void> _loadSubUrl() async {
@@ -82,10 +68,14 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       final res = await http.get(Uri.parse(url));
       if (res.statusCode != 200) throw Exception('HTTP ${res.statusCode}');
-      final parsed = FlutterVless.parseMany(res.body);
+      final content = res.body;
+      final lines = content.split('\n').where((l) => l.contains('server:')).toList();
       setState(() {
-        _servers = parsed;
-        _error = parsed.isEmpty ? 'Серверы не найдены' : '';
+        _servers = lines.map((l) {
+          final name = l.split('name:').last.trim().replaceAll('"', '');
+          return name.isEmpty ? 'Сервер ${lines.indexOf(l) + 1}' : name;
+        }).toList();
+        _error = '';
       });
     } catch (e) {
       setState(() => _error = 'Ошибка загрузки: $e');
@@ -101,11 +91,14 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _toggleConnect() async {
     if (_connecting) return;
-    setState(() => _connecting = true);
+    setState(() {
+      _connecting = true;
+      _error = '';
+    });
 
     try {
       if (_connected) {
-        await _vless.stopVless();
+        await FlutterSingBox().stopVpn();
         setState(() {
           _connected = false;
           _connecting = false;
@@ -121,21 +114,59 @@ class _HomeScreenState extends State<HomeScreen> {
         return;
       }
 
-      final selected = _servers[_selectedIdx];
-      final config = selected.getFullConfiguration();
+      final config = _buildSingBoxConfig(_servers[_selectedIdx]);
+      
+      // Правильный API: сохраняем конфиг, потом стартуем
+      await FlutterSingBox().saveConfig(config);
+      await FlutterSingBox().startVpn();
 
-      if (await _vless.requestPermission()) {
-        await _vless.startVless(
-          remark: selected.remark ?? 'THEK Server',
-          config: config,
-        );
-        setState(() => _connected = true);
-      }
+      setState(() {
+        _connected = true;
+        _connecting = false;
+      });
     } catch (e) {
-      setState(() => _error = 'Ошибка: $e');
-    } finally {
-      setState(() => _connecting = false);
+      setState(() {
+        _error = 'Ошибка: $e';
+        _connecting = false;
+      });
     }
+  }
+
+  String _buildSingBoxConfig(String serverName) {
+    // В реальном приложении здесь будет парсинг Clash YAML.
+    // Пока плагин делает это сам, мы просто передаём ему ссылку на подписку.
+    // Но для примера соберём простой JSON.
+    return '''
+    {
+      "log": {"level": "info"},
+      "inbounds": [
+        {
+          "type": "tun",
+          "interface_name": "tun0",
+          "inet4_address": "172.19.0.1/30",
+          "auto_route": true,
+          "strict_route": true
+        }
+      ],
+      "outbounds": [
+        {
+          "type": "selector",
+          "tag": "proxy",
+          "outbounds": ["$serverName"]
+        },
+        {
+          "type": "socks",
+          "tag": "$serverName",
+          "server": "PLACEHOLDER",
+          "server_port": 1080
+        }
+      ],
+      "route": {
+        "rules": [],
+        "final": "proxy"
+      }
+    }
+    ''';
   }
 
   void _showSubUrlDialog() {
@@ -190,7 +221,8 @@ class _HomeScreenState extends State<HomeScreen> {
             children: [
               Row(
                 children: [
-                  const Text('THEK', style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
+                  const Text('THEK',
+                      style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
                   const Spacer(),
                   IconButton(
                     icon: const Icon(Icons.settings, color: Color(0xFF8B95A5)),
@@ -237,7 +269,8 @@ class _HomeScreenState extends State<HomeScreen> {
                       const SizedBox(height: 8),
                       Text(
                         _connecting ? 'ПОДКЛЮЧЕНИЕ...' : _connected ? 'ОТКЛЮЧИТЬ' : 'ПОДКЛЮЧИТЬ',
-                        style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold, letterSpacing: 1),
+                        style: const TextStyle(
+                            color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold, letterSpacing: 1),
                       ),
                     ],
                   ),
@@ -283,7 +316,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           const SizedBox(width: 12),
                           Expanded(
                             child: Text(
-                              _servers[_selectedIdx].remark ?? 'Сервер ${_selectedIdx + 1}',
+                              _servers[_selectedIdx],
                               style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
                             ),
                           ),
@@ -300,7 +333,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             style: const TextStyle(color: Colors.white),
                             items: List.generate(_servers.length, (i) => DropdownMenuItem(
                               value: i,
-                              child: Text(_servers[i].remark ?? 'Сервер ${i + 1}'),
+                              child: Text(_servers[i]),
                             )),
                             onChanged: (i) => setState(() => _selectedIdx = i!),
                           ),

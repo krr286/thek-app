@@ -208,8 +208,6 @@ class _HomeScreenState extends State<HomeScreen> {
       'server': p['host'],
       'server_port': int.parse(p['port']!),
       'version': '5',
-      'domain_strategy': 'ipv4_only',
-      'udp_over_tcp': {'enabled': true, 'version': 2},
     };
     if ((p['user'] ?? '').isNotEmpty) {
       outbound['username'] = p['user']!;
@@ -228,17 +226,16 @@ class _HomeScreenState extends State<HomeScreen> {
           }
         ],
         'final': 'dns-remote',
-        'strategy': 'ipv4_only',
       },
       'inbounds': [
         {
           'type': 'tun',
           'tag': 'tun-in',
           'address': ['172.19.0.1/30'],
-          'mtu': 1400,
+          'mtu': 1500,
           'auto_route': true,
-          'strict_route': true,
-          'stack': 'gvisor',
+          'strict_route': false,
+          'stack': 'mixed',
         }
       ],
       'outbounds': [
@@ -246,11 +243,9 @@ class _HomeScreenState extends State<HomeScreen> {
         {'type': 'direct', 'tag': 'direct'},
       ],
       'route': {
-        'auto_detect_interface': true,
         'rules': [
           {'action': 'sniff'},
           {'protocol': 'dns', 'action': 'hijack-dns'},
-          {'ip_is_private': true, 'outbound': 'direct'},
         ],
         'final': 'proxy',
       },

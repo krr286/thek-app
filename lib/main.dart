@@ -208,6 +208,8 @@ class _HomeScreenState extends State<HomeScreen> {
       'server': p['host'],
       'server_port': int.parse(p['port']!),
       'version': '5',
+      'domain_strategy': 'ipv4_only',
+      'udp_over_tcp': {'enabled': true, 'version': 2},
     };
     if ((p['user'] ?? '').isNotEmpty) {
       outbound['username'] = p['user']!;

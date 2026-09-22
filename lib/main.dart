@@ -216,21 +216,39 @@ class _HomeScreenState extends State<HomeScreen> {
 
     final config = <String, dynamic>{
       'log': {'level': 'warn'},
+      'dns': {
+        'servers': [
+          {
+            'type': 'tcp',
+            'tag': 'dns-remote',
+            'server': '8.8.8.8',
+            'detour': 'proxy',
+          }
+        ],
+        'final': 'dns-remote',
+        'strategy': 'ipv4_only',
+      },
       'inbounds': [
         {
           'type': 'tun',
           'tag': 'tun-in',
           'address': ['172.19.0.1/30'],
-          'mtu': 9000,
+          'mtu': 1400,
           'auto_route': true,
           'strict_route': true,
-          'stack': 'mixed',
+          'stack': 'gvisor',
         }
       ],
-      'outbounds': [outbound],
+      'outbounds': [
+        outbound,
+        {'type': 'direct', 'tag': 'direct'},
+      ],
       'route': {
+        'auto_detect_interface': true,
         'rules': [
           {'action': 'sniff'},
+          {'protocol': 'dns', 'action': 'hijack-dns'},
+          {'ip_is_private': true, 'outbound': 'direct'},
         ],
         'final': 'proxy',
       },

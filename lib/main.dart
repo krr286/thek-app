@@ -234,8 +234,8 @@ class _HomeScreenState extends State<HomeScreen> {
           'address': ['172.19.0.1/30'],
           'mtu': 1500,
           'auto_route': true,
-          'strict_route': false,
-          'stack': 'mixed',
+          'strict_route': true,
+          'stack': 'system',
         }
       ],
       'outbounds': [
@@ -243,9 +243,11 @@ class _HomeScreenState extends State<HomeScreen> {
         {'type': 'direct', 'tag': 'direct'},
       ],
       'route': {
+        'auto_detect_interface': true,
         'rules': [
           {'action': 'sniff'},
           {'protocol': 'dns', 'action': 'hijack-dns'},
+          {'ip_is_private': true, 'outbound': 'direct'},
         ],
         'final': 'proxy',
       },

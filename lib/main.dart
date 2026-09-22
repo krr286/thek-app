@@ -208,6 +208,9 @@ class _HomeScreenState extends State<HomeScreen> {
       'server': p['host'],
       'server_port': int.parse(p['port']!),
       'version': '5',
+      // Включаем UDP-over-TCP ТОЛЬКО для UDP-трафика, чтобы не ломать TCP
+      'network': 'udp', 
+      'udp_over_tcp': {'enabled': true, 'version': 2},
     };
     if ((p['user'] ?? '').isNotEmpty) {
       outbound['username'] = p['user']!;

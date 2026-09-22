@@ -224,13 +224,14 @@ class _HomeScreenState extends State<HomeScreen> {
           'mtu': 9000,
           'auto_route': true,
           'strict_route': true,
-          'stack': 'system',
-          'sniff': true,
+          'stack': 'mixed',
         }
       ],
       'outbounds': [outbound],
       'route': {
-        'rules': <Map<String, dynamic>>[],
+        'rules': [
+          {'action': 'sniff'},
+        ],
         'final': 'proxy',
       },
     };

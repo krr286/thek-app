@@ -4,7 +4,6 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
-import 'package:outline_mobileproxy/outline_mobileproxy.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -42,7 +41,7 @@ class ThekApp extends StatelessWidget {
 
 class ServerInfo {
   final String name;
-  final String type; // 'socks5' | 'mtproto'
+  final String type;
   final String host;
   final int port;
   final String user;
@@ -70,6 +69,146 @@ class ServerInfo {
   bool get isMtproto => type == 'mtproto';
 }
 
+// ============ ЛОКАЛЬНЫЙ ПРОКСИ (чистый Dart) ============
+class LocalSocksProxy {
+  ServerSocket? _server;
+  int port = 0;
+  final String upstreamHost;
+  final int upstreamPort;
+  final String upstreamUser;
+  final String upstreamPass;
+  final List<Socket> _active = [];
+
+  LocalSocksProxy({
+    required this.upstreamHost,
+    required this.upstreamPort,
+    this.upstreamUser = '',
+    this.upstreamPass = '',
+  });
+
+  Future<int> start() async {
+    _server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    port = _server!.port;
+    _server!.listen(_handleClient);
+    return port;
+  }
+
+  Future<void> stop() async {
+    for (final s in _active) {
+      try { s.destroy(); } catch (_) {}
+    }
+    _active.clear();
+    await _server?.close();
+    _server = null;
+    port = 0;
+  }
+
+  void _handleClient(Socket client) async {
+    _active.add(client);
+    client.setOption(SocketOption.tcpNoDelay, true);
+
+    try {
+      // Читаем SOCKS5 greeting: [VER, NMETHODS, METHODS...]
+      final greeting = await _readN(client, 2);
+      if (greeting[0] != 0x05) { client.destroy(); return; }
+      final nmethods = greeting[1];
+      await _readN(client, nmethods);
+      // Отвечаем: выбираем "no auth"
+      client.add([0x05, 0x00]);
+
+      // Читаем request: [VER, CMD, RSV, ATYP, ADDR, PORT]
+      final req = await _readN(client, 4);
+      if (req[0] != 0x05 || req[1] != 0x01) { client.destroy(); return; }
+      final atyp = req[3];
+      String targetHost;
+      if (atyp == 0x01) {
+        final ip = await _readN(client, 4);
+        targetHost = '${ip[0]}.${ip[1]}.${ip[2]}.${ip[3]}';
+      } else if (atyp == 0x03) {
+        final len = (await _readN(client, 1))[0];
+        final hostBytes = await _readN(client, len);
+        targetHost = utf8.decode(hostBytes);
+      } else if (atyp == 0x04) {
+        final ip = await _readN(client, 16);
+        targetHost = ip.join('.');
+      } else { client.destroy(); return; }
+      final portBytes = await _readN(client, 2);
+      final targetPort = (portBytes[0] << 8) | portBytes[1];
+
+      // Отвечаем клиенту успех
+      client.add([0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0]);
+
+      // Подключаемся к upstream SOCKS5
+      final upstream = await Socket.connect(upstreamHost, upstreamPort,
+          timeout: const Duration(seconds: 10));
+      upstream.setOption(SocketOption.tcpNoDelay, true);
+
+      // SOCKS5 handshake с upstream
+      if (upstreamUser.isNotEmpty) {
+        upstream.add([0x05, 0x02, 0x00, 0x02]);
+      } else {
+        upstream.add([0x05, 0x01, 0x00]);
+      }
+      final upGreet = await _readN(upstream, 2);
+      if (upGreet[1] == 0x02) {
+        // user/pass auth (RFC 1929)
+        final u = utf8.encode(upstreamUser);
+        final p = utf8.encode(upstreamPass);
+        upstream.add([0x01, u.length, ...u, p.length, ...p]);
+        final authResp = await _readN(upstream, 2);
+        if (authResp[1] != 0x00) { client.destroy(); upstream.destroy(); return; }
+      } else if (upGreet[1] == 0xFF) {
+        client.destroy(); upstream.destroy(); return;
+      }
+
+      // Отправляем CONNECT к целевому хосту через upstream
+      final hostBytes = utf8.encode(targetHost);
+      upstream.add([
+        0x05, 0x01, 0x00, 0x03, hostBytes.length, ...hostBytes,
+        (targetPort >> 8) & 0xFF, targetPort & 0xFF
+      ]);
+      final upResp = await _readN(upstream, 4);
+      if (upResp[1] != 0x00) { client.destroy(); upstream.destroy(); return; }
+      // Дочитываем остаток ответа
+      if (upResp[3] == 0x01) { await _readN(upstream, 4 + 2); }
+      else if (upResp[3] == 0x03) {
+        final l = (await _readN(upstream, 1))[0];
+        await _readN(upstream, l + 2);
+      } else if (upResp[3] == 0x04) { await _readN(upstream, 16 + 2); }
+
+      // Пробрасываем трафик
+      client.listen((data) => upstream.add(data),
+          onDone: () { upstream.destroy(); client.destroy(); },
+          onError: (_) { upstream.destroy(); client.destroy(); });
+      upstream.listen((data) => client.add(data),
+          onDone: () { client.destroy(); upstream.destroy(); },
+          onError: (_) { client.destroy(); upstream.destroy(); });
+    } catch (e) {
+      try { client.destroy(); } catch (_) {}
+    }
+  }
+
+  Future<List<int>> _readN(Socket s, int n) async {
+    final out = <int>[];
+    final completer = Completer<void>();
+    late StreamSubscription sub;
+    sub = s.listen((data) {
+      out.addAll(data);
+      if (out.length >= n && !completer.isCompleted) {
+        completer.complete();
+        sub.cancel();
+      }
+    }, onDone: () {
+      if (!completer.isCompleted) completer.complete();
+    }, onError: (_) {
+      if (!completer.isCompleted) completer.complete();
+    });
+    await completer.future;
+    return out.sublist(0, n);
+  }
+}
+// ============ КОНЕЦ ЛОКАЛЬНОГО ПРОКСИ ============
+
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
   @override
@@ -84,7 +223,7 @@ class _HomeScreenState extends State<HomeScreen> {
   int _selectedIdx = 0;
   String _error = '';
   Timer? _refreshTimer;
-  MobileProxy? _mobileProxy;
+  LocalSocksProxy? _proxy;
   int _localPort = 0;
 
   @override
@@ -96,7 +235,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void dispose() {
     _refreshTimer?.cancel();
-    _mobileProxy?.stop();
+    _proxy?.stop();
     super.dispose();
   }
 
@@ -164,7 +303,8 @@ class _HomeScreenState extends State<HomeScreen> {
       final s = _servers[i];
       final sw = Stopwatch()..start();
       try {
-        final sock = await Socket.connect(s.host, s.port, timeout: const Duration(seconds: 3));
+        final sock = await Socket.connect(s.host, s.port,
+            timeout: const Duration(seconds: 3));
         sock.destroy();
         sw.stop();
         if (mounted) setState(() => s.pingMs = sw.elapsedMilliseconds);
@@ -211,23 +351,24 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() { _connecting = true; _error = ''; });
     try {
       if (_connected) {
-        await _mobileProxy?.stop();
-        _mobileProxy = null;
+        await _proxy?.stop();
+        _proxy = null;
         _localPort = 0;
         setState(() { _connected = false; _connecting = false; });
         return;
       }
-
       final p = _servers[_selectedIdx];
-      // Запускаем локальный прокси
-      final proxy = MobileProxy(
-        upstream: 'socks5://${p.user}:${p.pass}@${p.host}:${p.port}',
+      final proxy = LocalSocksProxy(
+        upstreamHost: p.host,
+        upstreamPort: p.port,
+        upstreamUser: p.user,
+        upstreamPass: p.pass,
       );
       final port = await proxy.start();
-      _mobileProxy = proxy;
+      _proxy = proxy;
       _localPort = port;
-
       setState(() { _connected = true; _connecting = false; });
+      if (mounted) _showLocalPortDialog();
     } catch (e) {
       setState(() { _error = 'Ошибка: $e'; _connecting = false; });
     }
@@ -239,16 +380,12 @@ class _HomeScreenState extends State<HomeScreen> {
       builder: (_) => AlertDialog(
         backgroundColor: const Color(0xFF161B2E),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Text('Подключение приложений', style: TextStyle(color: Colors.white)),
+        title: const Text('Подключение', style: TextStyle(color: Colors.white)),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Локальный прокси запущен на порту:', style: TextStyle(color: Color(0xFFA0A8BF))),
-            const SizedBox(height: 8),
-            Text('127.0.0.1:$_localPort', style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-            const SizedBox(height: 16),
-            const Text('В настройках Wi-Fi на телефоне укажи ручной HTTP-прокси:', style: TextStyle(color: Color(0xFFA0A8BF))),
+            const Text('Локальный прокси запущен:', style: TextStyle(color: Color(0xFFA0A8BF))),
             const SizedBox(height: 8),
             Container(
               padding: const EdgeInsets.all(12),
@@ -256,8 +393,15 @@ class _HomeScreenState extends State<HomeScreen> {
                 color: const Color(0xFF0F1422),
                 borderRadius: BorderRadius.circular(8),
               ),
-              child: const Text('Сервер: 127.0.0.1\nПорт: см. выше', style: TextStyle(color: Colors.white, fontFamily: 'monospace')),
+              child: Text('127.0.0.1:$_localPort',
+                  style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold, fontFamily: 'monospace')),
             ),
+            const SizedBox(height: 14),
+            const Text('Открой Настройки → Wi-Fi → твоя сеть → HTTP-прокси → Вручную:',
+                style: TextStyle(color: Color(0xFFA0A8BF), fontSize: 12)),
+            const SizedBox(height: 6),
+            const Text('Сервер: 127.0.0.1   Порт: см. выше',
+                style: TextStyle(color: Colors.white, fontSize: 12)),
           ],
         ),
         actions: [
@@ -265,7 +409,8 @@ class _HomeScreenState extends State<HomeScreen> {
             onPressed: () {
               Clipboard.setData(ClipboardData(text: '127.0.0.1:$_localPort'));
               Navigator.pop(context);
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Скопировано')));
+              ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Адрес скопирован')));
             },
             child: const Text('Копировать', style: TextStyle(color: Color(0xFF7C5CFF))),
           ),
@@ -285,7 +430,8 @@ class _HomeScreenState extends State<HomeScreen> {
       builder: (_) => AlertDialog(
         backgroundColor: const Color(0xFF161B2E),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Text('Код подписки', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+        title: const Text('Код подписки',
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
         content: TextField(
           controller: ctrl,
           style: const TextStyle(color: Colors.white, letterSpacing: 2),
@@ -295,7 +441,9 @@ class _HomeScreenState extends State<HomeScreen> {
             hintStyle: const TextStyle(color: Color(0xFF6B7290)),
             filled: true,
             fillColor: const Color(0xFF0F1422),
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+            border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide.none),
           ),
         ),
         actions: [
@@ -392,7 +540,8 @@ class _HomeScreenState extends State<HomeScreen> {
                 gradient: const LinearGradient(colors: [Color(0xFF22D3EE), Color(0xFF3B82F6)]),
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: const Text('Открыть', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+              child: const Text('Открыть',
+                  style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
             )
           else
             Icon(isSel ? Icons.check_circle : Icons.radio_button_unchecked,
@@ -423,8 +572,8 @@ class _HomeScreenState extends State<HomeScreen> {
               children: [
                 Row(children: [
                   const Text('THEK',
-                      style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w900,
-                          fontStyle: FontStyle.italic, letterSpacing: 1)),
+                      style: TextStyle(color: Colors.white, fontSize: 24,
+                          fontWeight: FontWeight.w900, fontStyle: FontStyle.italic, letterSpacing: 1)),
                   const Spacer(),
                   IconButton(
                     icon: const Icon(Icons.refresh, color: Color(0xFFA0A8BF)),
@@ -477,7 +626,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 const SizedBox(height: 20),
                 Center(
                   child: Text(
-                    _connected ? '✅ Защищено' : '❌ Не защищено',
+                    _connected ? '✅ Локальный прокси включён' : '❌ Не защищено',
                     style: TextStyle(
                       color: _connected ? const Color(0xFF22C55E) : const Color(0xFFA0A8BF),
                       fontSize: 15, fontWeight: FontWeight.w600,
@@ -488,7 +637,8 @@ class _HomeScreenState extends State<HomeScreen> {
                   Center(
                     child: TextButton(
                       onPressed: _showLocalPortDialog,
-                      child: Text('Порт: $_localPort', style: const TextStyle(color: Color(0xFF7C5CFF), fontSize: 12)),
+                      child: Text('Настроить прокси (порт $_localPort)',
+                          style: const TextStyle(color: Color(0xFF7C5CFF), fontSize: 12)),
                     ),
                   ),
                 const SizedBox(height: 30),
@@ -520,9 +670,12 @@ class _HomeScreenState extends State<HomeScreen> {
                     child: const Column(children: [
                       Icon(Icons.download, color: Color(0xFF7C5CFF), size: 36),
                       SizedBox(height: 12),
-                      Text('Введи код подписки', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600)),
+                      Text('Введи код подписки',
+                          style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w600)),
                       SizedBox(height: 6),
-                      Text('Нажми ⚙️ сверху и вставь код из бота', style: TextStyle(color: Color(0xFFA0A8BF), fontSize: 13), textAlign: TextAlign.center),
+                      Text('Нажми ⚙️ сверху и вставь код из бота',
+                          style: TextStyle(color: Color(0xFFA0A8BF), fontSize: 13),
+                          textAlign: TextAlign.center),
                     ]),
                   ),
                 for (int i = 0; i < _servers.length; i++) _serverCard(_servers[i], i),

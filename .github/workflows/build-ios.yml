@@ -1,0 +1,67 @@
+name: Build THEK iOS
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-ios:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.0'
+          channel: 'stable'
+
+      - name: Generate iOS structure
+        run: flutter create --org com.thek --project-name thek --platforms=ios .
+
+      - name: Patch iOS deployment target
+        run: |
+          if [ -f ios/Podfile ]; then
+            sed -i '' "s/# platform :ios.*/platform :ios, '13.0'/" ios/Podfile || true
+            sed -i '' "s/platform :ios.*/platform :ios, '13.0'/" ios/Podfile || true
+          fi
+          sed -i '' 's/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*/IPHONEOS_DEPLOYMENT_TARGET = 13.0/g' ios/Runner.xcodeproj/project.pbxproj || true
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Pod install
+        run: |
+          cd ios
+          pod install --repo-update || pod install
+
+      - name: Build iOS (no codesign)
+        run: flutter build ios --release --no-codesign
+
+      - name: Package .ipa (unsigned)
+        run: |
+          mkdir -p Payload
+          cp -r build/ios/iphoneos/Runner.app Payload/
+          zip -r TheK-Client.ipa Payload
+          ls -la TheK-Client.ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: thek-ios-v${{ github.run_number }}
+          path: TheK-Client.ipa
+          retention-days: 30
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ios-v1.0.${{ github.run_number }}
+          name: THEK iOS v1.0.${{ github.run_number }}
+          files: TheK-Client.ipa
+          draft: false
+          prerelease: false

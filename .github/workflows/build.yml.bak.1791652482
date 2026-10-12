@@ -1,0 +1,96 @@
+name: Build THEK APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.0'
+          channel: 'stable'
+
+      - name: Generate Android structure
+        run: flutter create --org com.thek --project-name thek --platforms=android .
+
+      - name: Patch Gradle wrapper to 8.9
+        run: |
+          sed -i 's|gradle-[0-9.]*-all.zip|gradle-8.9-all.zip|g' android/gradle/wrapper/gradle-wrapper.properties
+          sed -i 's|gradle-[0-9.]*-bin.zip|gradle-8.9-bin.zip|g' android/gradle/wrapper/gradle-wrapper.properties
+
+      - name: Patch SDK + NDK + Kotlin + AGP
+        run: |
+          for f in android/app/build.gradle android/app/build.gradle.kts; do
+            if [ -f "$f" ]; then
+              sed -i -E 's/compileSdk[[:space:]]*=[[:space:]]*flutter\.compileSdkVersion/compileSdk = 35/g' "$f"
+              sed -i -E 's/compileSdkVersion[[:space:]]+flutter\.compileSdkVersion/compileSdkVersion 35/g' "$f"
+              sed -i -E 's/targetSdk[[:space:]]*=[[:space:]]*flutter\.targetSdkVersion/targetSdk = 35/g' "$f"
+              sed -i -E 's/targetSdkVersion[[:space:]]+flutter\.targetSdkVersion/targetSdkVersion 35/g' "$f"
+              sed -i -E 's/minSdk[[:space:]]*=[[:space:]]*flutter\.minSdkVersion/minSdk = 23/g' "$f"
+              sed -i -E 's/minSdkVersion[[:space:]]+flutter\.minSdkVersion/minSdkVersion 23/g' "$f"
+              sed -i -E 's/ndkVersion[[:space:]]*=[[:space:]]*flutter\.ndkVersion/ndkVersion = "26.1.10909125"/g' "$f"
+              sed -i -E 's/ndkVersion[[:space:]]+flutter\.ndkVersion/ndkVersion "26.1.10909125"/g' "$f"
+              sed -i -E 's/compileSdk[[:space:]]*=[[:space:]]*[0-9]+/compileSdk = 35/g' "$f"
+              sed -i -E 's/targetSdk[[:space:]]*=[[:space:]]*[0-9]+/targetSdk = 35/g' "$f"
+              sed -i -E 's/minSdk[[:space:]]*=[[:space:]]*[0-9]+/minSdk = 23/g' "$f"
+              sed -i -E 's/ndkVersion[[:space:]]*=[[:space:]]*"[^"]*"/ndkVersion = "26.1.10909125"/g' "$f"
+            fi
+          done
+          if [ -f android/settings.gradle ]; then
+            sed -i -E 's/id "org\.jetbrains\.kotlin\.android" version "[^"]*"/id "org.jetbrains.kotlin.android" version "2.0.21"/g' android/settings.gradle
+            sed -i -E 's/id "com\.android\.application" version "[^"]*"/id "com.android.application" version "8.5.2"/g' android/settings.gradle
+          fi
+          if [ -f android/settings.gradle.kts ]; then
+            sed -i -E 's/id\("org\.jetbrains\.kotlin\.android"\) version "[^"]*"/id("org.jetbrains.kotlin.android") version "2.0.21"/g' android/settings.gradle.kts
+            sed -i -E 's/id\("com\.android\.application"\) version "[^"]*"/id("com.android.application") version "8.5.2"/g' android/settings.gradle.kts
+          fi
+          if [ -f android/build.gradle ]; then
+            sed -i -E "s/ext\.kotlin_version = '[^']*'/ext.kotlin_version = '2.0.21'/g" android/build.gradle
+          fi
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Show SessionOptions API
+        run: |
+          echo "===== SessionOptions ====="
+          cat /home/runner/.pub-cache/hosted/pub.dev/flutter_singbox_client-1.1.0/lib/src/models/session_options.dart || true
+          echo ""
+          echo "===== EngineOptions ====="
+          cat /home/runner/.pub-cache/hosted/pub.dev/flutter_singbox_client-1.1.0/lib/src/models/engine_options.dart || true
+
+      - name: Patch flutter_singbox_client packaging
+        run: |
+          find /home/runner/.pub-cache -path "*flutter_singbox_client*" -name "build.gradle" -exec sed -i 's/\bpackaging\b/packagingOptions/g' {} \;
+          find /home/runner/.pub-cache -path "*flutter_singbox_client*" -name "build.gradle" -exec sed -i 's/packagingOptionsOptions/packagingOptions/g' {} \;
+
+      - name: Build APK
+        run: flutter build apk --release
+
+      - name: Verify APK
+        run: test -f build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v12.0.${{ github.run_number }}
+          name: THEK v12.0.${{ github.run_number }}
+          files: build/app/outputs/flutter-apk/app-release.apk
+          draft: false
+          prerelease: false

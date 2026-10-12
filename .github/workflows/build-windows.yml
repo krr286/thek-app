@@ -11,46 +11,33 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.24.0'
           channel: 'stable'
-
-      - name: Enable Windows desktop
+      - name: Enable Windows
         run: flutter config --enable-windows-desktop
-
-      - name: Generate Windows structure
+      - name: Generate Windows
         run: flutter create --org com.thek --project-name thek --platforms=windows .
-
-      - name: Get dependencies
+      - name: Dependencies
         run: flutter pub get
-
       - name: Build Windows
         run: flutter build windows --release
-
-      - name: Package (zip)
+      - name: Package ZIP
         shell: pwsh
-        run: |
-          Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath TheK-Client-Windows.zip
-          Get-Item TheK-Client-Windows.zip | Format-List Length, Name
-
-      - name: Upload artifact
+        run: Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath TheK-Client-Windows.zip
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         if: success()
         with:
-          name: thek-windows-v${{ github.run_number }}
+          name: thek-windows
           path: TheK-Client-Windows.zip
           retention-days: 30
-
-      - name: Create Release
+      - name: Release
         uses: softprops/action-gh-release@v2
+        if: success()
         with:
           tag_name: windows-v1.0.${{ github.run_number }}
           name: THEK Windows v1.0.${{ github.run_number }}
           files: TheK-Client-Windows.zip
-          draft: false
-          prerelease: false
